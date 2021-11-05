@@ -5,6 +5,7 @@
 """
     TODO PREGUNTAR AL PROFESOR POR EL LOGIN
 """
+import random
 import time
 import traceback
 from sys import argv
@@ -21,11 +22,27 @@ class LectorMovimientos(threading.Thread):
         self.port_kakfa = port
         threading.Thread.__init__(self)
         self.stop_event = threading.Event()
+        self.visitantes = {}
+        self.posiciones = {b'A': 13 * 20 + 2, b'B': 18 * 20 + 7, b'C': 2 * 20 + 13, b'D': 7 * 20 + 18,
+                           b'E': 10 * 20 + 10} # TODO cargar las posiciones de las atracciones de la base de datos
 
     def stop(self):
         self.stop_event.set()
 
-    def consumir(self, consumer,producer):
+    def actualizaMapa(self, alias, mov):
+        for i in self.posiciones:
+            print("mov:",mov,"posic:",self.posiciones[i])
+            if int(mov) == self.posiciones[i]:
+                print("HA LLEGADO -------------------------------------")
+                return
+        global MAPA
+        id = -(list(self.visitantes).index(alias))-2
+        if id in MAPA:
+            loc = MAPA.index(id)
+            MAPA[loc] = -1
+        MAPA[int(mov)] = id
+
+    def consumir(self, consumer, producer):
 
         # formato del mensaje de kafka
         # alias:[n,m]
@@ -34,22 +51,40 @@ class LectorMovimientos(threading.Thread):
         movimiento = [0, 0]
         global VISITANTES
         global MAPA
+        producer.send('mapas', str(MAPA).encode())
+        ultimo = time.time()
         while not self.stop_event.is_set():
+            # si no ha enviado el mapa en dos segundo se reenvia, para os que se reconectan
+            if (time.time() - ultimo) > 2:
+                print("mapa enviado por despecho")
+                producer.send('mapas', str(MAPA).encode())
+                ultimo = time.time()
+
             for msg in consumer:
-                print("recibido movimiento: " + msg)
-                producer.send('mapas',MAPA)
+                print("recibido movimiento: ", msg.value)
+                nombre = msg.value.split(b':')[0]
+                movimiento = msg.value.split(b':')[1]
+                self.visitantes[nombre] = movimiento
+                if self.visitantes == {}:
+                    self.visitantes[nombre] = movimiento
+                elif nombre not in self.visitantes:
+                    self.visitantes[nombre] = movimiento
+                self.actualizaMapa(nombre,movimiento)
+                print("mapa enviado. visitantes:" + str(self.visitantes))
+                producer.send('mapas', str(MAPA).encode())
+                ultimo = time.time()
 
     def run(self):
-        print("INICIO LectorSensores")
+        print("INICIO LectorMovimientos")
         try:
             consumer = KafkaConsumer(bootstrap_servers=f'{self.ip_kafka}:{self.port_kakfa}',
-                                     auto_offset_reset='earliest',
-                                     consumer_timeout_ms=500)
+                                     auto_offset_reset='latest',
+                                     consumer_timeout_ms=100)
             consumer.subscribe(['movimientos'])
             producer = KafkaProducer(bootstrap_servers=f'{self.ip_kafka}:{self.port_kakfa}')
-            self.consumir(consumer,producer)
+            self.consumir(consumer, producer)
         except Exception as e:
-            print("ERROR EN LectorSensores :", e)
+            print("ERROR EN LectorMovimientos :", e)
             traceback.print_exc()
         finally:
             if 'consumer' in locals():
@@ -77,34 +112,44 @@ class PideTiempos(threading.Thread):
         self.stop_event = threading.Event()
         self.ip = ip
         self.port = port
+        self.posiciones = {b'A': 13 * 20 + 2, b'B': 18 * 20 + 7, b'C': 2 * 20 + 13, b'D': 7 * 20 + 18,
+                           b'E': 10 * 20 + 10}
 
     def stop(self):
         self.stop_event.set()
 
-    def escibe(self, tiempos: dict) -> dict:
+    def actualizaMapa(self, tiempos: dict) -> dict:
         """
-        TODO metodotemporal, hacer esto en la base de datos
+        Actualiza los timepos en el mapa
         """
-        global TIEMPOS
-        TIEMPOS = str(tiempos)
+        global MAPA
+        for i in tiempos:
+            MAPA[self.posiciones[i]] = tiempos[i]
 
     def run(self):
         HEADER = 10
 
         while not self.stop_event.is_set():
-            cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            print(self.ip, self.port)
-            cliente.connect((self.ip, self.port))
-            print('a')
-            print("conectado 1")
-            size = int(cliente.recv(HEADER))
-            print("size: ", size)
-            tiempos = cliente.recv(size)
-            print(f"he recibido {tiempos}")
-            tiempos = eval(tiempos)
-            self.escibe(tiempos)
-            cliente.close()
-            time.sleep(3)
+            try:
+                cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                print(self.ip, self.port)
+                cliente.connect((self.ip, self.port))
+                print('a')
+                print("conectado 1")
+                size = int(cliente.recv(HEADER))
+                print("size: ", size)
+                tiempos = cliente.recv(size)
+                print(f"he recibido {tiempos}")
+                tiempos = eval(tiempos.decode())
+                print("evaluado")
+                self.actualizaMapa(tiempos)
+                cliente.close()
+            except Exception as e:
+                print("ERROR PideTiempos:", e)
+            finally:
+                if 'cliente' in locals():
+                    cliente.close()
+                time.sleep(3)
         print("AAAAAAAAAAA")
 
 
@@ -158,7 +203,16 @@ def cargaMapa():
     mapa = cur.execute("select mapa from mapa")
     return mapa
     """
-    return [[b'' for i in range(0, 20)] for j in range(0, 20)]
+    mapa = []
+    for i in range(0, 20 * 20):
+        mapa += [-1]
+
+    for i in range(0, len(mapa)):
+        if i % 20 == 0:
+            print()
+        print(mapa[i], end=" ")
+    print(mapa)
+    return list(mapa)
 
 
 # Press the green button in the gutter to run the script.
@@ -166,7 +220,7 @@ if __name__ == '__main__':
     """
     if len(argv) < 6:
         print("Argumentos insuficientes")
-        print("Usage: engine.py <ip_kafka kafak> "
+        print("Usage: FWQ_Engine.py <ip_kafka kafak> "
               "<puerto kafka> "
               "<numero maximo de visitantes> "
               "<ip_kafka servidor tiempos> "
@@ -176,7 +230,9 @@ if __name__ == '__main__':
     # TODO Controlar los datos de entrada para dar error antes de meterlos
     # engine = Engine(argv[1], argv[2], argv[3], argv[4], argv[5], argv[6])
     print_hi('PyCharm')
-    VISITANTES = []  # lista con los alias de todos los visitates de los que lleva la cuenta
+    ## GLOBALES
+    VISITANTES = {}  # lista con los alias de todos los visitates de los que lleva la cuenta
+
     MAPA = cargaMapa()
     hilos = [
         LectorMovimientos(argv[1].split(':')[0],
@@ -185,7 +241,6 @@ if __name__ == '__main__':
                     int(argv[3].split(':')[1]))
     ]
 
-    TIEMPOS = ""
     for i in hilos:
         i.start()
 
