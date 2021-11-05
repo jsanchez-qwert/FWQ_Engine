@@ -6,5 +6,7 @@
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
+    <orderEntry type="module" module-name="FWQ_WaitingTimeServer" />
+    <orderEntry type="module" module-name="FWQ_Sensor" />
   </component>
 </module>
