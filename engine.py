@@ -6,52 +6,55 @@
     TODO PREGUNTAR AL PROFESOR POR EL LOGIN
 """
 import time
+import traceback
 from sys import argv
 import threading
 import socket
 import kafka
+from kafka import KafkaConsumer, KafkaProducer
+import sqlite3
 
 
-class LectorSensores(threading.Thread):
+class LectorMovimientos(threading.Thread):
     def __init__(self, ip, port):
-        self.ip = ip
-        self.port = port
+        self.ip_kafka = ip
+        self.port_kakfa = port
         threading.Thread.__init__(self)
         self.stop_event = threading.Event()
 
     def stop(self):
         self.stop_event.set()
 
-    def consumir(self, consumer):
-        #global TIEMPOS_ESPERA
-        TIEMPOS_ESPERA = {}
+    def consumir(self, consumer,producer):
+
+        # formato del mensaje de kafka
+        # alias:[n,m]
+        # alias:movimiento
+        # los movimientos pueden ser NN SS EE WW NE SE NW SW
+        movimiento = [0, 0]
+        global VISITANTES
+        global MAPA
         while not self.stop_event.is_set():
             for msg in consumer:
-                atraccion = msg.value.split(b" ")[0]
-                valor = int(msg.value.split(b" ")[1])
-                TIEMPOS_ESPERA[atraccion] = tiempo(valor)
-                self.escribe_tiempos(TIEMPOS_ESPERA)
-
-    def escribe_tiempos(self, TIEMPOS_ESPERA):
-        f = open("./timepos.dat", "+w")
-        f.write(str(TIEMPOS_ESPERA))
-        f.close()
+                print("recibido movimiento: " + msg)
+                producer.send('mapas',MAPA)
 
     def run(self):
         print("INICIO LectorSensores")
         try:
-            consumer = KafkaConsumer(bootstrap_servers=f'{self.ip}:{self.port}',
+            consumer = KafkaConsumer(bootstrap_servers=f'{self.ip_kafka}:{self.port_kakfa}',
                                      auto_offset_reset='earliest',
                                      consumer_timeout_ms=500)
-            consumer.subscribe(['atracciones'])
-            self.consumir(consumer)
+            consumer.subscribe(['movimientos'])
+            producer = KafkaProducer(bootstrap_servers=f'{self.ip_kafka}:{self.port_kakfa}')
+            self.consumir(consumer,producer)
         except Exception as e:
             print("ERROR EN LectorSensores :", e)
             traceback.print_exc()
         finally:
             if 'consumer' in locals():
                 consumer.close()
-            print("FIN LectorSensores")
+            print("FIN LectorMovimientos")
 
 
 class Engine:
@@ -68,6 +71,7 @@ class PideTiempos(threading.Thread):
     Clase Thread que se conecta cada 3 segundos al servidor de tiempos que le
     hayamos indicado.
     """
+
     def __init__(self, ip, port):
         threading.Thread.__init__(self)
         self.stop_event = threading.Event()
@@ -94,7 +98,7 @@ class PideTiempos(threading.Thread):
             print('a')
             print("conectado 1")
             size = int(cliente.recv(HEADER))
-            print("size: ",size)
+            print("size: ", size)
             tiempos = cliente.recv(size)
             print(f"he recibido {tiempos}")
             tiempos = eval(tiempos)
@@ -102,6 +106,7 @@ class PideTiempos(threading.Thread):
             cliente.close()
             time.sleep(3)
         print("AAAAAAAAAAA")
+
 
 def login(credenciales):
     """
@@ -141,25 +146,41 @@ def control_datos_entrada(ip_k: str, port_k: int, max_visitantes: int, ip_w: str
     """
     return True
 
+
 def manejador(signum, frame):
     print("Holas")
+
+
+def cargaMapa():
+    """
+    con = sqlite3.connect("../database.db")
+    cur = con.cursor()
+    mapa = cur.execute("select mapa from mapa")
+    return mapa
+    """
+    return [[b'' for i in range(0, 20)] for j in range(0, 20)]
+
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
     """
     if len(argv) < 6:
         print("Argumentos insuficientes")
-        print("Usage: engine.py <ip kafak> "
+        print("Usage: engine.py <ip_kafka kafak> "
               "<puerto kafka> "
               "<numero maximo de visitantes> "
-              "<ip servidor tiempos> "
+              "<ip_kafka servidor tiempos> "
               "<puerto ""servidor tiempos>")
         exit(-1)
     """
-        # TODO Controlar los datos de entrada para dar error antes de meterlos
-    #engine = Engine(argv[1], argv[2], argv[3], argv[4], argv[5], argv[6])
+    # TODO Controlar los datos de entrada para dar error antes de meterlos
+    # engine = Engine(argv[1], argv[2], argv[3], argv[4], argv[5], argv[6])
     print_hi('PyCharm')
+    VISITANTES = []  # lista con los alias de todos los visitates de los que lleva la cuenta
+    MAPA = cargaMapa()
     hilos = [
+        LectorMovimientos(argv[1].split(':')[0],
+                          int(argv[1].split(':')[1])),
         PideTiempos(argv[3].split(':')[0],
                     int(argv[3].split(':')[1]))
     ]
