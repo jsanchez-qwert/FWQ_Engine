@@ -6,6 +6,7 @@
     TODO PREGUNTAR AL PROFESOR POR EL LOGIN
 """
 import random
+import signal
 import time
 import traceback
 from sys import argv
@@ -16,6 +17,8 @@ from kafka import KafkaConsumer, KafkaProducer
 import sqlite3
 
 
+
+
 class LectorMovimientos(threading.Thread):
     def __init__(self, ip, port):
         self.ip_kafka = ip
@@ -24,23 +27,33 @@ class LectorMovimientos(threading.Thread):
         self.stop_event = threading.Event()
         self.visitantes = {}
         self.posiciones = {b'A': 13 * 20 + 2, b'B': 18 * 20 + 7, b'C': 2 * 20 + 13, b'D': 7 * 20 + 18,
-                           b'E': 10 * 20 + 10} # TODO cargar las posiciones de las atracciones de la base de datos
+                           b'E': 10 * 20 + 10}  # TODO cargar las posiciones de las atracciones de la base de datos
+        self.tiempos = {}
+        self.mapa = [-1 for i in range(0, 400)]
 
     def stop(self):
         self.stop_event.set()
 
-    def actualizaMapa(self, alias, mov):
-        for i in self.posiciones:
-            print("mov:",mov,"posic:",self.posiciones[i])
-            if int(mov) == self.posiciones[i]:
-                print("HA LLEGADO -------------------------------------")
-                return
-        global MAPA
-        id = -(list(self.visitantes).index(alias))-2
-        if id in MAPA:
-            loc = MAPA.index(id)
-            MAPA[loc] = -1
-        MAPA[int(mov)] = id
+    def actualizaMapa(self):
+        print("v:", self.visitantes)
+        global TIEMPOS
+        self.tiempos = TIEMPOS
+        print("t:", self.tiempos)
+        print("l:", self.posiciones)
+        self.mapa = [-1 for i in range(0, 400)]
+        aux = self.visitantes
+        for i in self.visitantes:
+            print("filtro:", i, self.visitantes[i])
+            if self.visitantes[i] != b'-1':
+                aux[i] = self.visitantes[i]
+        self.visitantes = aux
+
+        for j in self.visitantes:
+            self.mapa[int(self.visitantes[j])] = -(list(self.visitantes.keys()).index(j)) - 2
+
+        for j in self.posiciones:
+            if j in self.tiempos:
+                self.mapa[self.posiciones[j]] = self.tiempos[j]
 
     def consumir(self, consumer, producer):
 
@@ -48,30 +61,34 @@ class LectorMovimientos(threading.Thread):
         # alias:[n,m]
         # alias:movimiento
         # los movimientos pueden ser NN SS EE WW NE SE NW SW
-        movimiento = [0, 0]
-        global VISITANTES
-        global MAPA
-        producer.send('mapas', str(MAPA).encode())
+        producer.send('mapas', str(self.mapa).encode())
         ultimo = time.time()
-        while not self.stop_event.is_set():
+        while (not self.stop_event.is_set()) and running:
             # si no ha enviado el mapa en dos segundo se reenvia, para os que se reconectan
-            if (time.time() - ultimo) > 2:
+            if (time.time() - ultimo) > 1:
+                self.actualizaMapa()
                 print("mapa enviado por despecho")
-                producer.send('mapas', str(MAPA).encode())
+                print("ENVIANDO: ", str(self.mapa).encode())
+                producer.send('mapas', str(self.mapa).encode())
                 ultimo = time.time()
 
             for msg in consumer:
+                if (time.time() - ultimo) > 1:
+                    self.actualizaMapa()
+                    print("mapa enviado por despecho")
+                    print("ENVIANDO: ", str(self.mapa).encode())
+                    producer.send('mapas', str(self.mapa).encode())
+                    ultimo = time.time()
+                self.actualizaMapa()
                 print("recibido movimiento: ", msg.value)
                 nombre = msg.value.split(b':')[0]
                 movimiento = msg.value.split(b':')[1]
                 self.visitantes[nombre] = movimiento
-                if self.visitantes == {}:
-                    self.visitantes[nombre] = movimiento
-                elif nombre not in self.visitantes:
-                    self.visitantes[nombre] = movimiento
-                self.actualizaMapa(nombre,movimiento)
+
                 print("mapa enviado. visitantes:" + str(self.visitantes))
-                producer.send('mapas', str(MAPA).encode())
+                print("ENVIANDO: ", str(self.mapa).encode())
+                self.actualizaMapa()
+                #producer.send('mapas', str(self.mapa).encode())
                 ultimo = time.time()
 
     def run(self):
@@ -118,18 +135,18 @@ class PideTiempos(threading.Thread):
     def stop(self):
         self.stop_event.set()
 
-    def actualizaMapa(self, tiempos: dict) -> dict:
+    def actualizaTiempos(self, tiempos: dict) -> dict:
         """
         Actualiza los timepos en el mapa
         """
-        global MAPA
-        for i in tiempos:
-            MAPA[self.posiciones[i]] = tiempos[i]
+        global TIEMPOS
+        TIEMPOS = tiempos
+        print(f"TT: {TIEMPOS}")
 
     def run(self):
         HEADER = 10
 
-        while not self.stop_event.is_set():
+        while (not self.stop_event.is_set()) and running:
             try:
                 cliente = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 print(self.ip, self.port)
@@ -142,7 +159,7 @@ class PideTiempos(threading.Thread):
                 print(f"he recibido {tiempos}")
                 tiempos = eval(tiempos.decode())
                 print("evaluado")
-                self.actualizaMapa(tiempos)
+                self.actualizaTiempos(tiempos)
                 cliente.close()
             except Exception as e:
                 print("ERROR PideTiempos:", e)
@@ -193,6 +210,8 @@ def control_datos_entrada(ip_k: str, port_k: int, max_visitantes: int, ip_w: str
 
 
 def manejador(signum, frame):
+    global running
+    running = False
     print("Holas")
 
 
@@ -232,8 +251,11 @@ if __name__ == '__main__':
     print_hi('PyCharm')
     ## GLOBALES
     VISITANTES = {}  # lista con los alias de todos los visitates de los que lleva la cuenta
+    signal.signal(signal.SIGINT, manejador)
 
-    MAPA = cargaMapa()
+    running = True
+    # MAPA = cargaMapa()
+    TIEMPOS = {}
     hilos = [
         LectorMovimientos(argv[1].split(':')[0],
                           int(argv[1].split(':')[1])),
@@ -244,7 +266,9 @@ if __name__ == '__main__':
     for i in hilos:
         i.start()
 
-    time.sleep(10000)
+    while running:
+        pass
+    time.sleep(1)
 
     for i in hilos:
         i.stop()
