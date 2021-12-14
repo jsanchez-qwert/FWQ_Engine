@@ -15,6 +15,10 @@ import socket
 import kafka
 from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient
 import sqlite3
+import json
+import requests
+import urllib
+import os
 
 from kafka.admin import NewTopic
 
@@ -291,10 +295,110 @@ def control_datos_entrada(ip_k: str, port_k: int, max_visitantes: int, ip_w: str
     return True
 
 
-def manejador(signum, frame):
-    global running
-    running = False
-    print("Holas")
+#def manejador(signum, frame):
+#    global running
+#    running = False
+#    print("Holas")
+
+
+# a thread that gets info from an api and sotres it in the global variable
+class leeTemperatura(threading.Thread):
+    """
+    Clase Thread que se conecta cada 3 segundos al servidor de tiempos que le
+    hayamos indicado.
+    """
+
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.stop_event = threading.Event()
+        self.ciudades_file = "./ciudades"
+        self.api_key_file = "./api_key"
+
+    def stop(self):
+        self.stop_event.set()
+
+    def setApiKey(self):
+        with open(self.api_key_file, "r") as f:
+            self.api_key = f.readline().strip()
+            f.close()
+
+    def setCiudades(self):
+        self.ciudades = []
+        f = open(self.ciudades_file, "r")
+        l = f.readline().strip()
+        while l != "":
+            self.ciudades.append(l)
+            l = f.readline().strip()
+        f.close()
+
+
+    def getTemperatura(self):
+        url = "https://api.openweathermap.org/data/2.5/weather"
+        print("ciudades:",self.ciudades)
+        for ciudad in self.ciudades:
+            time.sleep(5)
+            try:
+                params = {'q': ciudad, 'appid': self.api_key}
+                print(url)
+                fu = f"https://api.openweathermap.org/data/2.5/weather?q={ciudad}\&appid={self.api_key}"
+                print(params)
+                response = requests.get(url, params=params)
+                if response.status_code == 200:
+                    respuesta = response.json()
+                    temperatura = respuesta["main"]["temp"]
+                    TEMPERATURA[ciudad] = temperatura
+                    print(f"Temperatura de {ciudad} es {temperatura}", TEMPERATURA)
+                else:
+                    print(f"Error al recuperar tiempos {ciudad}")
+            except Exception as e:
+                print("ERROR EN getTemperatura", e)
+                traceback.print_exc()
+
+    def run(self):
+        print("INICIO leeTemperatura")
+        try:
+            self.setApiKey()
+            self.setCiudades()
+            while (not self.stop_event.is_set()):
+                self.getTemperatura()
+        except Exception as e:
+            print("ERROR EN leeTemperatura :", e)
+            traceback.print_exc()
+        finally:
+            print("FIN leeTemperatura")
+
+
+
+# a thread that store the map in the database every 3 seconds
+class storeMap(threading.Thread):
+    """
+    Cada tres segundos guarda el MAPA en en la base de datos
+    TODO: Rehacer guardando en la base datos en lugar de un fichero
+    """
+    def __init__(self, database_path):
+        threading.Thread.__init__(self)
+        self.stop_event = threading.Event()
+        #self.database_path = database_path
+        self.database_path = "./mapa.txt"
+
+    def stop(self):
+        self.stop_event.set()
+
+    def run(self):
+        print("INICIO sotreMap")
+        try:
+            while (not self.stop_event.is_set()) :
+                time.sleep(3)
+                with open(self.database_path, 'w') as f:
+                    f.write(json.dumps(MAPA))
+                # print("storeMap guardo el mapa en la base de datos")
+        except Exception as e:
+            print("ERROR EN sotreMap :", e)
+            traceback.print_exc()
+        finally:
+            print("FIN sotreMap")
+
+
 
 
 # Press the green button in the gutter to run the script.
@@ -312,10 +416,15 @@ if __name__ == '__main__':
     #
     # engine = Engine(argv[1], argv[2], argv[3], argv[4], argv[5], argv[6])
     # GLOBALES
-    signal.signal(signal.SIGINT, manejador)
+    usage = "python3 FWQ_Engine.py <ip_kafka:puerto> <numero maximo de visitantes> <ip_espera:puerto> <database>"
+    if len(argv) < 5:
+        print(usage)
+        exit(-1)
+    # signal.signal(signal.SIGINT, manejador)
     running = True
     VISITANTES = {}  # lista con los alias de todos los visitates de los que lleva la cuenta
     TIEMPOS = {}
+    TEMPERATURA = {}
     MAPA = [-1 for i in range(0, 400)]
     LIMITE = int(argv[2])
     print(argv)
@@ -323,6 +432,8 @@ if __name__ == '__main__':
         LectorMovimientos(argv[1].split(':')[0],
                           int(argv[1].split(':')[1]),
                           argv[4]),
+        storeMap(argv[4]),
+        leeTemperatura(),
         AccesManager(argv[1].split(':')[0],
                      int(argv[1].split(':')[1]),
                      argv[4]),
@@ -331,7 +442,11 @@ if __name__ == '__main__':
     ]
 
     for i in hilos:
+        i.setDaemon(True)
+
+    for i in hilos:
         i.start()
+    os.system("python3 ./Api_Engine.py")
 
     while running:
         pass
