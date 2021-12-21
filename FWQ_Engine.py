@@ -322,20 +322,20 @@ class leeTemperatura(threading.Thread):
             self.api_key = f.readline().strip()
             f.close()
 
-    def setCiudades(self):
-        self.ciudades = []
+    def getCiudades(self):
+        ciudades = []
         f = open(self.ciudades_file, "r")
         l = f.readline().strip()
         while l != "":
-            self.ciudades.append(l)
+            ciudades.append(l)
             l = f.readline().strip()
         f.close()
+        return ciudades
 
 
     def getTemperatura(self):
         url = "https://api.openweathermap.org/data/2.5/weather"
-        print("ciudades:",self.ciudades)
-        for ciudad in self.ciudades:
+        for ciudad in self.getCiudades():
             time.sleep(5)
             try:
                 params = {'q': ciudad, 'appid': self.api_key}
@@ -358,7 +358,6 @@ class leeTemperatura(threading.Thread):
         print("INICIO leeTemperatura")
         try:
             self.setApiKey()
-            self.setCiudades()
             while (not self.stop_event.is_set()):
                 self.getTemperatura()
         except Exception as e:
