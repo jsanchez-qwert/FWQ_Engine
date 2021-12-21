@@ -336,7 +336,7 @@ class leeTemperatura(threading.Thread):
     def getTemperatura(self):
         url = "https://api.openweathermap.org/data/2.5/weather"
         for ciudad in self.getCiudades():
-            time.sleep(5)
+            time.sleep(20)
             try:
                 params = {'q': ciudad, 'appid': self.api_key}
                 print(url)
