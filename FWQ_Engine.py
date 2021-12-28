@@ -5,6 +5,7 @@
 """
     Jorge Sanchez Pastor 49779447N
 """
+import hashlib
 import random
 import signal
 import time
@@ -21,6 +22,8 @@ import urllib
 import os
 
 from kafka.admin import NewTopic
+
+
 
 
 class LectorMovimientos(threading.Thread):
@@ -85,8 +88,18 @@ def actualizaTiempos(tiempos: dict):
     Actualiza los timepos en el mapa
     """
     global TIEMPOS
-    TIEMPOS = tiempos
-    # print(f"TT: {TIEMPOS}")
+    global CONGELADOS
+    global ASIGNACIONES
+    TIEMPOS = {}
+    for i in tiempos:
+        if ASIGNACIONES[i] not in CONGELADOS:
+            TIEMPOS[i] = tiempos[i]
+        else:
+            print("CONGELADO")
+            TIEMPOS[i] = 99
+    print(f"CC: {CONGELADOS}")
+    print(f"TT: {TIEMPOS}")
+    print(f"AA: {ASIGNACIONES}")
 
 
 class PideTiempos(threading.Thread):
@@ -147,6 +160,7 @@ class AccesManager(threading.Thread):
 
     def login(self, alias, passwd):
         final = False
+        passwd = hashlib.sha256(passwd.encode()).hexdigest()
         con = sqlite3.connect(self.database)
         cur = con.cursor()
         sql_comand = f"select * from users where " \
@@ -333,8 +347,20 @@ class leeTemperatura(threading.Thread):
         return ciudades
 
 
+
+    def asignaciones(self):
+        global ASIGNACIONES
+        ciudades = self.getCiudades()
+        atracc = [b'A', b'B', b'C', b'D']
+        for i in range(0,len(ciudades)):
+            ASIGNACIONES[atracc[i]] = ciudades[i]
+        print("ASIGNACIONES: ", ASIGNACIONES)
+
+
+
     def getTemperatura(self):
         url = "https://api.openweathermap.org/data/2.5/weather"
+        self.asignaciones()
         for ciudad in self.getCiudades():
             time.sleep(20)
             try:
@@ -345,8 +371,17 @@ class leeTemperatura(threading.Thread):
                 response = requests.get(url, params=params)
                 if response.status_code == 200:
                     respuesta = response.json()
-                    temperatura = respuesta["main"]["temp"]
+                    temperatura = respuesta["main"]["temp"] - 273.15
                     TEMPERATURA[ciudad] = temperatura
+                    if temperatura > 30:
+                        CONGELADOS.append(ciudad)
+                        TIEMPOS[ciudad] = 99;
+                    elif temperatura < 10:
+                        CONGELADOS.append(ciudad)
+                        TIEMPOS[ciudad] = 99;
+                    else:
+                        if ciudad in CONGELADOS:
+                            CONGELADOS.remove(ciudad)
                     print(f"Temperatura de {ciudad} es {temperatura}", TEMPERATURA)
                 else:
                     print(f"Error al recuperar tiempos {ciudad}")
@@ -424,6 +459,8 @@ if __name__ == '__main__':
     VISITANTES = {}  # lista con los alias de todos los visitates de los que lleva la cuenta
     TIEMPOS = {}
     TEMPERATURA = {}
+    ASIGNACIONES = {}
+    CONGELADOS = []
     MAPA = [-1 for i in range(0, 400)]
     LIMITE = int(argv[2])
     print(argv)
